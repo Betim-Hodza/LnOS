@@ -54,42 +54,76 @@ LNOS_VCONSOLE_KEYMAP=""
 LNOS_DISK=""
 LNOS_BOOT_PARTITION=""
 LNOS_ROOT_PARTITION=""
-LNOS_FILESYSTEM="btrfs"         # Default, user can change
+LNOS_FILESYSTEM=""         # Default, user can change
 LNOS_BOOTLOADER=""
-LNOS_ENCRYPTION_ENABLED="false"
-LNOS_DESKTOP_ENABLED="false"
+LNOS_ENCRYPTION_ENABLED=""
+LNOS_DESKTOP_ENABLED=""
 LNOS_DESKTOP_ENVIRONMENT=""
-LNOS_DESKTOP_GRAPHICS_DRIVER="none"
-LNOS_MULTILIB_ENABLED="false"
-LNOS_AUR_HELPER="none"
+LNOS_DESKTOP_GRAPHICS_DRIVER=""
+LNOS_MULTILIB_ENABLED=""
+LNOS_AUR_HELPER=""
 LNOS_PACKAGE_PROFILE=""
+
+
+# ==================================================================================================
+# BETTER LOGGING 
+# ==================================================================================================
+log() {
+	local level="$1"
+	shift 
+	local msg="$*"
+	local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+	local func="${FUNCNAME[2]:-main}"
+	local line="${BASH_LINENO[1]:-?}"
+	echo -e "$timestamp | $level | $func:$line | $msg" >> "$SCRIPT_LOG"
+  echo -e "$msg"
+}
+
+log_debug() { log "DEBUG" "$@"; }
+log_info()  { log "INFO " "$@"; }
+log_warn()  { log "WARN " "$@"; }
+log_error() { log "ERROR" "$@"; }
+log_fatal() { log "FATAL" "$@"; exit 1; }
+
+
+run_logged() {
+	log_debug "Running: $*"
+	"$@" 2>&1 | while IFS= read -r line; do log_debug "$line"; done
+	return ${PIPESTATUS[0]}
+}
 
 # ==================================================================================================
 # TRAP FUNCTIONS
 # ==================================================================================================
 
 trap_error() {
-    echo "Command '${BASH_COMMAND}' failed with exit code $? in function '${1}' (line ${2})" > "$ERROR_MSG"
+	local cmd="$BASH_COMMAND"
+	local code=$?
+	echo "Command '$cmd' failed with code $code in ${FUNCNAME[1]:-unknown} (line ${BASH_LINENO[0]})" > "$ERROR_MSG"
 }
 
 trap_exit() {
-    local result_code="$?"
-    local error
-    [ -f "$ERROR_MSG" ] && error="$(<"$ERROR_MSG")" && rm -f "$ERROR_MSG"
+	local code=$?
+	local error_msg=""
+	[ -f "$ERROR_MSG" ] && error_msg=$(<"$ERROR_MSG") && rm -f "$ERROR_MSG"
 
-    # Cleanup sensitive data and temp files
-    unset LNOS_PASSWORD LNOS_ROOT_PASSWORD
-    rm -rf "$SCRIPT_TMP_DIR"
+	unset LNOS_PASSWORD LNOS_ROOT_PASSWORD
+	rm -rf "$SCRIPT_TMP_DIR"
 
-    [ "$result_code" = "130" ] && gum_warn "Exit..." && exit 1
+	if [ $code -eq 130 ]; then
+			gum_warn "Installation cancelled by user" || log_warn "Installation cancelled"
+			exit 1
+	fi
 
-    if [ "$result_code" -gt "0" ]; then
-        [ -n "$error" ] && gum_fail "$error"
-        [ -z "$error" ] && gum_fail "An error occurred"
-        gum_warn "See ${SCRIPT_LOG} for more information..."
-    fi
-
-    exit "$result_code"
+	if [ $code -ne 0 ]; then
+			if [ -n "$error_msg" ]; then
+					gum_fail "$error_msg" || log_error "$error_msg"
+			else
+					gum_fail "Installation failed with code $code" || log_error "Installation failed with code $code"
+			fi
+			gum_warn "Full log: $SCRIPT_LOG" || log_warn "Full log: $SCRIPT_LOG"
+	fi
+	exit $code
 }
 
 trap 'trap_exit' EXIT
@@ -113,24 +147,12 @@ gum_green() { gum_style --foreground "$COLOR_GREEN" "${@}"; }
 gum_yellow() { gum_style --foreground "$COLOR_YELLOW" "${@}"; }
 gum_red() { gum_style --foreground "$COLOR_RED" "${@}"; }
 
-gum_title() { log_head "${*}" && gum join "$(gum_foreground --bold "+ ")" "$(gum_foreground --bold "${*}")"; }
+gum_title() { log_info "${*}" && gum join "$(gum_foreground --bold "+ ")" "$(gum_foreground --bold "${*}")"; }
 gum_info() { log_info "$*" && gum join "$(gum_green --bold "• ")" "$(gum_white "${*}")"; }
 gum_warn() { log_warn "$*" && gum join "$(gum_yellow --bold "• ")" "$(gum_white "${*}")"; }
-gum_fail() { log_fail "$*" && gum join "$(gum_red --bold "• ")" "$(gum_white "${*}")"; }
-gum_proc() { log_proc "$*" && gum join "$(gum_green --bold "• ")" "$(gum_white --bold "$(print_filled_space 24 "${1}")")" "$(gum_white " > ")" "$(gum_green "${2}")"; }
-gum_property() { log_prop "$*" && gum join "$(gum_green --bold "• ")" "$(gum_white "$(print_filled_space 24 "${1}")")" "$(gum_green --bold " > ")" "$(gum_white --bold "${2}")"; }
-
-# ==================================================================================================
-# LOGGING
-# ==================================================================================================
-
-write_log() { echo -e "$(date '+%Y-%m-%d %H:%M:%S') | lnos | ${*}" >> "$SCRIPT_LOG"; }
-log_info() { write_log "INFO | ${*}"; }
-log_warn() { write_log "WARN | ${*}"; }
-log_fail() { write_log "FAIL | ${*}"; }
-log_head() { write_log "HEAD | ${*}"; }
-log_proc() { write_log "PROC | ${*}"; }
-log_prop() { write_log "PROP | ${*}"; }
+gum_fail() { log_fatal "$*" && gum join "$(gum_red --bold "• ")" "$(gum_white "${*}")"; }
+gum_proc() { log_debug "$*" && gum join "$(gum_green --bold "• ")" "$(gum_white --bold "$(print_filled_space 24 "${1}")")" "$(gum_white " > ")" "$(gum_green "${2}")"; }
+gum_property() { log_debug "$*" && gum join "$(gum_green --bold "• ")" "$(gum_white "$(print_filled_space 24 "${1}")")" "$(gum_green --bold " > ")" "$(gum_white --bold "${2}")"; }
 
 # ==================================================================================================
 # HELPER FUNCTIONS
@@ -393,6 +415,7 @@ select_package_profile() {
 
 install_base_system() {
     gum_info "Installing base system..."
+		log_info "Starting base system installation"
 
     # Detect boot mode
     if [ -d /sys/firmware/efi ]; then
@@ -407,40 +430,45 @@ install_base_system() {
     # Final warning before wiping disk
     gum_confirm "This will COMPLETELY WIPE $LNOS_DISK. Continue?" || exit 1
 
-    wipefs -af "$LNOS_DISK"
-    sgdisk --zap-all "$LNOS_DISK"
+    run_logged wipefs -af "$LNOS_DISK"
+    run_logged sgdisk --zap-all "$LNOS_DISK"
 
     if [ "$BOOT_MODE" = "uefi" ]; then
-        sgdisk -o "$LNOS_DISK"
-        sgdisk -n 1:0:+1G -t 1:ef00 -c 1:boot "$LNOS_DISK"
-        sgdisk -n 2:0:0 -t 2:8300 -c 2:root "$LNOS_DISK"
+			run_logged sgdisk -o "$LNOS_DISK"
+			run_logged sgdisk -n 1:0:+1G -t 1:ef00 -c 1:boot "$LNOS_DISK"
+			run_logged sgdisk -n 2:0:0 -t 2:8300 -c 2:root "$LNOS_DISK"
     else
-        parted "$LNOS_DISK" mklabel msdos
-        parted "$LNOS_DISK" mkpart primary fat32 1MiB 513MiB
-        parted "$LNOS_DISK" mkpart primary ext2 513MiB 100%
-        parted "$LNOS_DISK" set 1 boot on
+			run_logged parted "$LNOS_DISK" mklabel msdos
+			run_logged parted "$LNOS_DISK" mkpart primary fat32 1MiB 513MiB
+			run_logged parted "$LNOS_DISK" mkpart primary ext2 513MiB 100%
+			run_logged parted "$LNOS_DISK" set 1 boot on
     fi
 
-    partprobe "$LNOS_DISK"
+    run_logged partprobe "$LNOS_DISK"
 
     # Encryption handling
     if [ "$LNOS_ENCRYPTION_ENABLED" = "true" ]; then
-        echo -n "$LNOS_PASSWORD" | cryptsetup luksFormat --type luks2 "$LNOS_ROOT_PARTITION"
-        echo -n "$LNOS_PASSWORD" | cryptsetup open "$LNOS_ROOT_PARTITION" cryptroot
-        ROOT_DEV="/dev/mapper/cryptroot"
+			
+			log_info "formatting encrypted root partition"
+
+			echo -n "$LNOS_PASSWORD" | cryptsetup luksFormat --type luks2 "$LNOS_ROOT_PARTITION"
+			echo -n "$LNOS_PASSWORD" | cryptsetup open "$LNOS_ROOT_PARTITION" cryptroot
+			ROOT_DEV="/dev/mapper/cryptroot"
     else
-        ROOT_DEV="$LNOS_ROOT_PARTITION"
+			ROOT_DEV="$LNOS_ROOT_PARTITION"
     fi
 
     # Format boot partition
-    mkfs.fat -F32 -n BOOT "$LNOS_BOOT_PARTITION"
+    run_logged mkfs.fat -F32 -n BOOT "$LNOS_BOOT_PARTITION"
 
     # Format root
     if [ "$LNOS_FILESYSTEM" = "ext4" ]; then
-        mkfs.ext4 -F -L ROOT "$ROOT_DEV"
+			run_logged mkfs.ext4 -F -L ROOT "$ROOT_DEV"
     else
-        mkfs.btrfs -f -L ROOT "$ROOT_DEV"
+			run_logged mkfs.btrfs -f -L ROOT "$ROOT_DEV"
     fi
+
+		log_debug "mounting drives"
 
     # Mount
     mount "$ROOT_DEV" /mnt
@@ -451,8 +479,8 @@ install_base_system() {
     [ "$LNOS_FILESYSTEM" = "btrfs" ] && packages+=(btrfs-progs)
     [ "$LNOS_BOOTLOADER" = "grub" ] && packages+=(grub) && [ "$BOOT_MODE" = "uefi" ] && packages+=(efibootmgr)
 
-    pacstrap -K /mnt "${packages[@]}"
-    genfstab -U /mnt >> /mnt/etc/fstab
+    run_logged pacstrap -K /mnt "${packages[@]}"
+    run_logged genfstab -U /mnt >> /mnt/etc/fstab
 
     gum_info "Base system installed"
 }
@@ -501,54 +529,55 @@ EOF
 }
 
 install_bootloader() {
-    gum_info "Installing bootloader..."
+	gum_info "Installing bootloader..."
+	log_info "Installing bootloader: $LNOS_BOOTLOADER ($BOOT_MODE)"
 
-    local kernel_args=('rw')
+	local kernel_args=('rw')
 
-    if [ "$LNOS_ENCRYPTION_ENABLED" = "true" ]; then
-        local uuid=$(blkid -s UUID -o value "$LNOS_ROOT_PARTITION")
-        kernel_args+=("rd.luks.uuid=$uuid" "root=/dev/mapper/cryptroot")
-    else
-        kernel_args+=("root=PARTUUID=$(blkid -s PARTUUID -o value "$LNOS_ROOT_PARTITION")")
-    fi
+	if [ "$LNOS_ENCRYPTION_ENABLED" = "true" ]; then
+		local uuid=$(blkid -s UUID -o value "$LNOS_ROOT_PARTITION")
+		kernel_args+=("rd.luks.uuid=$uuid" "root=/dev/mapper/cryptroot")
+	else
+		kernel_args+=("root=PARTUUID=$(blkid -s PARTUUID -o value "$LNOS_ROOT_PARTITION")")
+	fi
 
-    if [ "$BOOT_MODE" = "uefi" ]; then
-        if [ "$LNOS_BOOTLOADER" = "systemd" ]; then
-            arch-chroot /mnt bootctl --esp-path=/boot install
-            mkdir -p /mnt/boot/loader/entries
-            cat > /mnt/boot/loader/loader.conf <<EOF
+	if [ "$BOOT_MODE" = "uefi" ]; then
+		if [ "$LNOS_BOOTLOADER" = "systemd" ]; then
+			arch-chroot /mnt bootctl --esp-path=/boot install
+			mkdir -p /mnt/boot/loader/entries
+			cat > /mnt/boot/loader/loader.conf <<EOF
 default main.conf
 timeout 0
 editor no
 EOF
-            cat > /mnt/boot/loader/entries/main.conf <<EOF
+			cat > /mnt/boot/loader/entries/main.conf <<EOF
 title   LnOS
 linux   /vmlinuz-linux-hardened
 initrd  /initramfs-linux-hardened.img
 options ${kernel_args[*]}
 EOF
-            # Secure Boot (best effort)
-            arch-chroot /mnt pacman -S --noconfirm sbctl
-            arch-chroot /mnt sbctl create-keys || true
-            arch-chroot /mnt sbctl enroll-keys --microsoft --yes-this-might-brick-my-machine || true
-            for f in /boot/vmlinuz-linux-hardened /boot/initramfs-linux-hardened.img /boot/loader/loader.conf /boot/loader/entries/main.conf; do
-                arch-chroot /mnt sbctl sign -s "$f" || true
-            done
-        else  # GRUB on UEFI
-            arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
-            arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-            sed -i "/GRUB_CMDLINE_LINUX_DEFAULT=/s/\"$/ ${kernel_args[*]} \"/" /mnt/etc/default/grub
-            arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-            gum_warn "GRUB installed on UEFI (Secure Boot not supported)"
-        fi
-    else  # BIOS
-        arch-chroot /mnt pacman -S --noconfirm grub
-        sed -i "/GRUB_CMDLINE_LINUX_DEFAULT=/s/\"$/ ${kernel_args[*]} \"/" /mnt/etc/default/grub
-        arch-chroot /mnt grub-install --target=i386-pc "$LNOS_DISK"
-        arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-    fi
+			# Secure Boot (best effort)
+			arch-chroot /mnt pacman -S --noconfirm sbctl
+			arch-chroot /mnt sbctl create-keys || true
+			arch-chroot /mnt sbctl enroll-keys --microsoft --yes-this-might-brick-my-machine || true
+			for f in /boot/vmlinuz-linux-hardened /boot/initramfs-linux-hardened.img /boot/loader/loader.conf /boot/loader/entries/main.conf; do
+				arch-chroot /mnt sbctl sign -s "$f" || true
+			done
+		else  # GRUB on UEFI
+			run_logged arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
+			run_logged arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+			sed -i "/GRUB_CMDLINE_LINUX_DEFAULT=/s/\"$/ ${kernel_args[*]} \"/" /mnt/etc/default/grub
+			run_logged arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+			gum_warn "GRUB installed on UEFI (Secure Boot not supported)"
+		fi
+	else  # BIOS
+		run_logged arch-chroot /mnt pacman -S --noconfirm grub
+		sed -i "/GRUB_CMDLINE_LINUX_DEFAULT=/s/\"$/ ${kernel_args[*]} \"/" /mnt/etc/default/grub
+		run_logged arch-chroot /mnt grub-install --target=i386-pc "$LNOS_DISK"
+		run_logged arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+	fi
 
-    gum_info "Bootloader installed"
+	gum_info "Bootloader installed"
 }
 
 install_desktop_environment() {
